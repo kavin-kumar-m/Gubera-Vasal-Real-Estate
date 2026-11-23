@@ -1,0 +1,98 @@
+import { getSql } from './_db.js';
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  const databaseUrl = process.env.DATABASE_URL || 
+    process.env.POSTGRES_URL || 
+    process.env.NEON_URL || 
+    process.env.STORAGE_URL;
+  if (!databaseUrl || databaseUrl.includes('user:password')) {
+    return res.status(400).json({
+      success: false,
+      error: 'Database connection URL is not configured in Vercel environment variables. Please connect your Neon integration or add your connection string.'
+    });
+  }
+
+  // Security check: require ADMIN_API_KEY if defined in environment
+  const expectedKey = process.env.ADMIN_API_KEY;
+  const providedKey = req.headers['x-admin-key'] || req.query.key;
+  if (expectedKey && providedKey !== expectedKey) {
+    return res.status(401).json({ success: false, error: 'Unauthorized: Invalid admin key.' });
+  }
+
+  try {
+    const sql = getSql();
+
+    // 1. Create enquiries table
+    await sql`
+      CREATE TABLE IF NOT EXISTS enquiries (
+        id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+        enquiry_code VARCHAR(50) UNIQUE NOT NULL,
+        full_name VARCHAR(150) NOT NULL,
+        phone_number VARCHAR(25) NOT NULL,
+        email VARCHAR(150),
+        preferred_location VARCHAR(100) DEFAULT 'Coimbatore',
+        property_type VARCHAR(100) DEFAULT 'Gated Community Plots',
+        budget VARCHAR(100) DEFAULT '₹20 Lakhs – ₹35 Lakhs',
+        message TEXT,
+        status VARCHAR(50) DEFAULT 'New Lead',
+        source VARCHAR(50) DEFAULT 'Website Form',
+        ip_address VARCHAR(64),
+        user_agent TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `;
+
+    // 2. Create index for fast lead ordering
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_enquiries_created_at ON enquiries (created_at DESC);
+    `;
+
+    // 3. Create projects table
+    await sql`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        location TEXT NOT NULL,
+        sub_location TEXT,
+        property_type TEXT DEFAULT 'Gated Community Plots' NOT NULL,
+        description TEXT,
+        starting_price TEXT NOT NULL,
+        price_per_cent TEXT,
+        plot_sizes TEXT DEFAULT '1.75 to 8.0 Cents' NOT NULL,
+        sqft_range TEXT DEFAULT '762 – 3,485 Sq.Ft',
+        loan_eligibility TEXT DEFAULT '80% to 90% Bank Loan Approved by All Major Banks' NOT NULL,
+        image_url TEXT NOT NULL,
+        gallery JSONB DEFAULT '[]'::jsonb,
+        highlights JSONB DEFAULT '[]'::jsonb,
+        status TEXT DEFAULT 'Available',
+        is_featured BOOLEAN DEFAULT true,
+        has_video_tour BOOLEAN DEFAULT true,
+        video_url TEXT,
+        video_title TEXT,
+        display_order INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_projects_order ON projects (display_order ASC, created_at DESC);`;
+
+    return res.status(200).json({
+      success: true,
+      message: 'Neon PostgreSQL database tables (enquiries, projects) and indexes initialized successfully for Gubera Vasal!'
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}
+
